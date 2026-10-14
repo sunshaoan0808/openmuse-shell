@@ -231,7 +231,7 @@ export default function App() {
                     </Button>
                     <Text style={[s.small, { marginTop: 15 }]}>
                       填你的 OpenMuse 服务器地址（例如
-                      http://10.7.0.6:8787）。它会记在这台设备上。本地工作区无需密钥。
+                      http://192.0.2.6:8787）。它会记在这台设备上。本地工作区无需密钥。
                     </Text>
                   </Card>
                 )}

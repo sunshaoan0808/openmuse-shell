@@ -23,7 +23,7 @@ test("识别自家文件的链接：带签名/不带签名/绝对与相对都认
     id,
     "带签名 query 的绝对地址",
   );
-  assert.equal(fileIdFromUrl(`http://10.7.0.6:8787/api/files/${id}/content`), id);
+  assert.equal(fileIdFromUrl(`http://192.0.2.6:8787/api/files/${id}/content`), id);
   assert.equal(fileIdFromUrl(`/api/files/${id}`), id, "没有 /content 后缀也要认");
   assert.equal(fileIdFromUrl("https://example.com/doc"), undefined, "外部链接不该被拦下");
   assert.equal(fileIdFromUrl("/api/files/ab"), undefined, "太短的片段不像文件 id");

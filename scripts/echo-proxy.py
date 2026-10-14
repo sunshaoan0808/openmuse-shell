@@ -4,7 +4,7 @@
 用途：当"网关说 key 无效、但同样的 key 用 curl 又是 200"时，唯一能定位的办法就是
 看清 SDK 到底往请求里塞了什么头。
 
-监听 127.0.0.1:9599，把 /v1/... 原样转发到 UPSTREAM（默认 http://10.7.0.1:9527）。
+监听 127.0.0.1:9599，把 /v1/... 原样转发到 UPSTREAM（默认 http://192.0.2.1:9527）。
 只打印指纹：长度、前 4 字符、sha256 前 16 位。绝不打印密钥本体。
 """
 import hashlib
@@ -15,7 +15,7 @@ import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-UPSTREAM = os.environ.get("ECHO_UPSTREAM", "http://10.7.0.1:9527")
+UPSTREAM = os.environ.get("ECHO_UPSTREAM", "http://192.0.2.1:9527")
 up = urllib.parse.urlparse(UPSTREAM)
 LOG = os.environ.get("ECHO_LOG", "/tmp/echo-proxy.log")
 

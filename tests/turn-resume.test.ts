@@ -104,7 +104,7 @@ test("toAgUiMessages：只留 user/assistant 的文本，工具消息与空内�
 test("selfBaseUrl：通配监听要换成回环，否则连不上自己", () => {
   assert.equal(selfBaseUrl({ host: "0.0.0.0", port: 8787 }), "http://127.0.0.1:8787");
   assert.equal(selfBaseUrl({ host: "::", port: 8787 }), "http://127.0.0.1:8787");
-  assert.equal(selfBaseUrl({ host: "10.7.0.6", port: 8787 }), "http://10.7.0.6:8787");
+  assert.equal(selfBaseUrl({ host: "192.0.2.6", port: 8787 }), "http://192.0.2.6:8787");
 });
 
 // ---------------------------------------------------------------- 巡检
@@ -149,7 +149,7 @@ function harness(options: { status?: string; messages?: Record<string, unknown>[
       },
     },
     auth: { async session() { return { token: "self-token" }; } },
-    config: { mode: "live", accessKey: "x".repeat(32), host: "10.7.0.6", port: 8787 },
+    config: { mode: "live", accessKey: "x".repeat(32), host: "192.0.2.6", port: 8787 },
     async post(url: string, init: { body: string }) {
       posts.push({ url, body: JSON.parse(init.body) as Record<string, unknown> });
       if (options.postThrows) throw new Error("连接失败");
@@ -210,7 +210,7 @@ test("resumeTurn：401 时清掉令牌缓存，下一轮重新取（令牌过期
   const deps: ResumeDeps = {
     store: harness().deps.store,
     auth: { async session() { calls += 1; return { token: `t${calls}` }; } },
-    config: { mode: "live", accessKey: "x".repeat(32), host: "10.7.0.6", port: 8787 },
+    config: { mode: "live", accessKey: "x".repeat(32), host: "192.0.2.6", port: 8787 },
     async post() {
       return new Response("nope", { status: 401 });
     },

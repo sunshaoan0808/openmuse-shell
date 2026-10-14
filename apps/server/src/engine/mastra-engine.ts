@@ -34,7 +34,7 @@ import type { NeutralTool } from "./tool-kit.ts";
 /**
  * 把模型层的原始报错翻成用户能看懂的中文提示。
  *
- * 网关（zen，10.7.0.1:9527）在尖峰时会返回 5xx / "Service temporarily overloaded"，
+ * 网关（zen，192.0.2.1:9527）在尖峰时会返回 5xx / "Service temporarily overloaded"，
  * 桥会把原始英文错误直接作为 RUN_ERROR 抛给界面；Mastra 的调用选项里并没有 maxRetries
  * （AgentConfig 与桥都不认这个字段），所以这里只做"说人话"，不做自动重试。
  */

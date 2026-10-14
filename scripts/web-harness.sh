@@ -17,8 +17,8 @@ set -euo pipefail
 # 我曾经因此把 API 服务当成占用者杀掉了。用专属变量名。
 WEB_PORT="${WEB_PORT:-8081}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# API 只监听 10.7.0.6:8787（不监听 127.0.0.1）—— 用 localhost 铸令牌会静默失败
-API_BASE="${API_BASE:-http://10.7.0.6:8787}"
+# API 只监听 192.0.2.6:8787（不监听 127.0.0.1）—— 用 localhost 铸令牌会静默失败
+API_BASE="${API_BASE:-http://192.0.2.6:8787}"
 MOBILE="$ROOT/apps/mobile"
 LOG=/tmp/om-web.log
 TOKEN_FILE=/tmp/om-token
@@ -57,7 +57,7 @@ mint_token() {
   local key
   key="$(grep -E '^OPENMUSE_ACCESS_KEY=' "$ROOT/.env" | cut -d= -f2-)"
   [ -n "$key" ] || { echo "✗ .env 里没有 OPENMUSE_ACCESS_KEY" >&2; exit 1; }
-  curl -s -X POST "${API_BASE:=http://10.7.0.6:8787}/api/session" -H 'content-type: application/json' \
+  curl -s -X POST "${API_BASE:=http://192.0.2.6:8787}/api/session" -H 'content-type: application/json' \
     -d "$(printf '{"accessKey":"%s"}' "$key")" |
     python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'
 }
@@ -78,7 +78,7 @@ check_env() {
   echo "bundle 内联 API 地址     : ${api_in_bundle:-（取不到）}（应为 ${API_BASE}）"
   [ "$api_in_bundle" = "$API_BASE" ] || { echo "✗ 打包时没带上 API 地址 —— app 会去 localhost:8787 然后连接被拒"; ok=0; }
   local code
-  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat "$TOKEN_FILE" 2>/dev/null)" "${API_BASE:-http://10.7.0.6:8787}/api/agent" || true)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat "$TOKEN_FILE" 2>/dev/null)" "${API_BASE:-http://192.0.2.6:8787}/api/agent" || true)"
   echo "本地令牌对 API 的响应   : ${code}"
   [ "$code" = "200" ] || { echo "✗ 令牌无效（会话过期）"; ok=0; }
   [ "$ok" = "1" ] && echo "✓ 环境是当前代码 + 有效令牌" || { echo "✗ 环境不可用"; return 1; }
