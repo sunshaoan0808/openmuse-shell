@@ -1,0 +1,287 @@
+import { z } from "zod";
+
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "waiting_approval"
+  | "waiting_input"
+  | "scheduled"
+  | "paused"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+export interface Evidence {
+  id: string;
+  kind: "mail" | "file" | "web" | "user";
+  title: string;
+  excerpt: string;
+  url?: string;
+}
+export interface TaskStep {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "waiting";
+  detail?: string;
+}
+import type { RunActivity } from "./activity.ts";
+
+export interface AgentTask {
+  id: string;
+  title: string;
+  prompt: string;
+  kind: "agent" | "document" | "monitor" | "finance" | "plan";
+  status: TaskStatus;
+  goalId?: string;
+  threadId?: string;
+  plan: TaskStep[];
+  evidence: Evidence[];
+  input: Record<string, unknown>;
+  state: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  nextRunAt?: string;
+  leaseId?: string | null;
+  leaseUntil?: string | null;
+  /** 服务端折好的任务流（activityForTask）：任务行可以直接显示"做了哪些事、跑了多久" */
+  activity?: RunActivity;
+  attempts: number;
+  actionId?: string | null;
+  result?: string;
+  error?: string | null;
+  question?: string;
+  artifactIds: string[];
+  /** 快照里附带：任务最近完成的一步（列表行显示"它刚做了什么"，照 Muse 的列表）。 */
+  lastStep?: { kind: string; title: string; detail?: string; date: string };
+}
+export interface RunEvent {
+  id: string;
+  taskId: string;
+  date: string;
+  kind: "plan" | "step" | "observation" | "approval" | "result" | "error" | "status";
+  title: string;
+  detail: string;
+  /** 这一步是哪个工具做的（"step" 事件才有）。服务端据此把步骤折成任务流。 */
+  tool?: string;
+}
+export interface Goal {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  status: "active" | "paused" | "completed";
+  milestones: { id: string; title: string; done: boolean }[];
+  createdAt: string;
+}
+export interface Monitor {
+  id: string;
+  taskId: string;
+  title: string;
+  url: string;
+  condition: "change" | "contains" | "price_below";
+  value: string;
+  intervalMinutes: number;
+  status: "active" | "paused" | "stopped";
+  nextCheckAt: string;
+  lastCheckedAt?: string;
+  lastValue?: string;
+  lastHash?: string;
+  error?: string;
+  checks: number;
+}
+/**
+ * 照 Muse 的 `explore/repo/IdeaCardItem`：一条灵感可以拆成**多个可勾选的小条目**，
+ * 执行时按 itemIds 传（而不是整卡一把梭）。字段名对齐 Muse：selectable / isSelected。
+ */
+export interface IdeaItem {
+  id: string;
+  kind: string;
+  title: string;
+  summary?: string;
+  /** 这一条做出来会得到什么（Muse 的 buildSummary） */
+  buildSummary?: string;
+  selectable: boolean;
+  selected?: boolean;
+}
+export interface Idea {
+  id: string;
+  title: string;
+  reason: string;
+  evidence: Evidence[];
+  prompt: string;
+  kind: AgentTask["kind"];
+  input: Record<string, unknown>;
+  status: "new" | "dismissed" | "accepted";
+  taskId?: string;
+  createdAt: string;
+  /**
+   * 用户对这条灵感的反馈（照 Muse 的 IdeaFeedback{UP, DOWN}）。
+   * 用途不只是显示：`refreshIdeas` 会据此让后续推荐避开被踩过的方向。
+   */
+  feedback?: "up" | "down";
+  /** 照 Muse 的 IdeaCardItem：拆出来的可勾选条目 */
+  items?: IdeaItem[];
+  /** 照 Muse 的 badges/labels：卡片上的角标（数据驱动，客户端只负责画） */
+  badges?: string[];
+  /** 照 Muse 的 buildSummary：这条灵感"造出来"会得到什么 */
+  buildSummary?: string;
+  /** 照 Muse 的 SeededIdeaDetail：预置/种子灵感（没有任何来源时也能给出可执行的事） */
+  seeded?: boolean;
+  /** 照 Muse 的 IdeaCardsViewerStateJson.hasBuiltIdea：已经做过至少一次 */
+  builtAt?: string;
+  /** 照 Muse 的 IdeaCardExecuteRequestJson.mode：执行方式（默认按勾选的条目走） */
+  mode?: string;
+}
+export interface AgentMemory {
+  id: string;
+  text: string;
+  source: string;
+  createdAt: string;
+  /**
+   * 记忆温度：3=🔥燃烧（始终注入，不衰减）/ 2=🌡️温热（优先注入，14 天未更新则降为冷存）/
+   * 1=❄️冷存（预算够才注入）。缺省按冷存处理。模型与衰减规则见
+   * `apps/server/src/engine/memory-temperature.ts`。
+   */
+  temp?: number;
+}
+export interface AgentArtifact {
+  id: string;
+  taskId: string;
+  kind: "plan" | "comparison" | "finance" | "report";
+  title: string;
+  summary: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+}
+export interface AgentNotification {
+  id: string;
+  taskId?: string;
+  title: string;
+  body: string;
+  createdAt: string;
+  read: boolean;
+}
+export interface AgentIdentity {
+  name: string;
+  tone: "warm" | "concise" | "thoughtful";
+  avatar?: "sky" | "sand" | "lilac";
+  showChatUpdates?: boolean;
+  /**
+   * 绑定的角色（persona）id：对应 `apps/server/personas/templates/<id>/` 或 `runtime/<id>/`。
+   * `null` / 空 = 不注入角色（保持通用助手人格）；资产缺失时自动退化为只用 name/tone，
+   * 行为与接入前一致。见 `apps/server/src/engine/personas.ts`。
+   */
+  personaId?: string | null;
+}
+
+/** 角色模板的对外摘要（设置页列表用；不带 SOUL/GENOME 正文，省流量）。 */
+export interface AgentPersonaSummary {
+  id: string;
+  name: string;
+  /** 10 大原型之一，如「冷傲型」 */
+  prototype?: string;
+  gender?: string;
+  description?: string;
+  /** 一句台词（详情用） */
+  oneLine?: string;
+  /** 核心底色（一个字 + 解读） */
+  core?: string;
+  /** emoji 头像 */
+  avatar?: string;
+  order?: number;
+  /** 7 维人格光谱 */
+  spectrum?: Record<string, number>;
+  /** 4 层递进魅力 */
+  charmLayers?: string[];
+}
+export interface AgentWorkspace {
+  tasks: AgentTask[];
+  goals: Goal[];
+  monitors: Monitor[];
+  ideas: Idea[];
+  memories: AgentMemory[];
+  artifacts: AgentArtifact[];
+  notifications: AgentNotification[];
+  identity: AgentIdentity;
+  worker: { running: boolean; lastTickAt?: string };
+  /** 各会话此刻在干什么（App 显示实时状态，按会话匹配）；太久没更新则为空。 */
+  live?: {
+    id: string;
+    tool: string;
+    text: string;
+    detail: string;
+    threadId?: string;
+    at: string;
+  }[];
+}
+export const createTaskSchema = z.object({
+  title: z.string().trim().min(1).max(160).optional(),
+  prompt: z.string().trim().min(1).max(12000),
+  kind: z.enum(["agent", "document", "monitor", "finance", "plan"]).default("agent"),
+  goalId: z.string().optional(),
+  /** 提出这件事的会话：让结果/审批回到它开始的地方 */
+  threadId: z.string().trim().max(200).optional(),
+  input: z.record(z.string(), z.unknown()).default({}),
+  /**
+   * 这个任务需要的**短时凭据**（照 Muse：铸一把用一把，任务结束即销毁）。
+   * 服务端在这里铸，明文只留在库里供工具取用，任务终态时吊销并擦掉明文。
+   */
+  credentials: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1).max(80),
+        kind: z.enum(["git", "api", "ssh"]),
+        scopes: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
+        ttlMs: z
+          .number()
+          .int()
+          .positive()
+          .max(24 * 60 * 60_000)
+          .optional(),
+      }),
+    )
+    .max(4)
+    .optional(),
+});
+export type CreateTaskInput = z.infer<typeof createTaskSchema>;
+export const monitorInputSchema = z
+  .object({
+    title: z.string().min(1).max(160),
+    url: z.url().max(4096),
+    condition: z.enum(["change", "contains", "price_below"]).default("change"),
+    value: z.string().max(300).default(""),
+    intervalMinutes: z.number().int().min(1).max(10080).default(15),
+  })
+  .superRefine((v, c) => {
+    if (v.condition !== "change" && !v.value.trim())
+      c.addIssue({ code: "custom", message: "请填写监控条件值" });
+    if (
+      v.condition === "price_below" &&
+      (!Number.isFinite(Number(v.value)) || Number(v.value) <= 0)
+    )
+      c.addIssue({ code: "custom", message: "请填写一个正数价格" });
+  });
+export const goalInputSchema = z.object({
+  title: z.string().trim().min(1).max(160),
+  description: z.string().max(4000).default(""),
+  category: z.string().max(80).default("Personal"),
+  milestones: z.array(z.string().min(1).max(200)).max(20).default([]),
+});
+
+/**
+ * 任务级**短时凭据**（照 Muse 的做法：`LinkDeviceTokenMinter.mintDeviceTokens/revokeDeviceTokens`
+ * + `ConfidentialVmTemporaryAccess`）。
+ * 要点：密钥不是长期放在配置里，而是"要用时铸一把、用完**显式吊销**"。
+ */
+export type CredentialKind = "git" | "api" | "ssh";
+export interface TemporaryCredential {
+  id: string;
+  label: string;
+  kind: CredentialKind;
+  scopes: string[];
+  /** 绑定到某个任务：该任务一结束就吊销（TemporaryAccess 的语义） */
+  taskId?: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string;
+  revokeReason?: "task_finished" | "manual" | "expired";
+}

@@ -1,0 +1,169 @@
+name: UI 验收（Maestro · Android 模拟器）
+
+# 目的：把"改完 → 打包 → 让用户真机试"换成"CI 里跑真机级 UI 验收"。
+# 依据：React Native 官方仓库自己的 CI 也是 Maestro + reactivecircus/android-emulator-runner。
+# 用法：Actions 里手动触发（可选传 fake_token，让 App 以已登录态启动，才能跑顶栏/水豚那几条 flow）。
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "API base URL"
+        required: true
+        default: "https://openmuse.claw.ssan.me"
+      build_type:
+        description: "Gradle task"
+        required: true
+        default: "assembleRelease"
+
+env:
+  EXPO_PUBLIC_API_URL: ${{ inputs.api_url }}
+  # 会话令牌在跑之前用 access key 现换（access key 长期有效，会话只有 24h）——从不落日志
+  OPENMUSE_ACCESS_KEY: ${{ secrets.OPENMUSE_ACCESS_KEY }}
+
+jobs:
+  maestro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # ubuntu-latest 自带 Android SDK + cmdline-tools；不再用 android-actions/setup-android
+      # （v3 会去装已废弃的 "tools" 包并当场失败）
+      - name: Android SDK — 安装平台/构建工具/NDK
+        run: |
+          set -e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | head -1)"
+          export PATH="$SDKM:$ANDROID_HOME/platform-tools:$PATH"
+          which sdkmanager
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" \
+            "ndk;27.1.12297006" "cmake;3.22.1" 2>&1 | tail -3
+          echo "sdk dirs:"; ls "$ANDROID_HOME"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 令牌必须在**打包之前**换：EXPO_PUBLIC_* 是打包时内联进 bundle 的，包打完了再设环境变量对 APK 毫无影响
+      # （之前这一步排在 gradle 之后，等于白做）。变量用 E2E 专用名，由 App.tsx 显式读取 —— release 包里
+      # __DEV__ 为 false，原来那条 `__DEV__ && web` 的分支在真机上永远不成立（所以以前 CI 装出来的包必然是未登录态）。
+      - name: 用 access key 换会话令牌（必须在打包之前；供真机 E2E 以已登录态启动）
+        if: env.OPENMUSE_ACCESS_KEY != ''
+        run: |
+          set -e
+          TOKEN=$(curl -sS -X POST "$EXPO_PUBLIC_API_URL/api/session" \
+            -H "content-type: application/json" \
+            -d "{\"accessKey\":\"$OPENMUSE_ACCESS_KEY\"}" \
+            | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('token') or '')")
+          if [ -z "$TOKEN" ]; then
+            echo "::error::换不到会话令牌 —— 未登录态下顶栏/文件预览那几条真机判据会被静默跳过，等于白跑"
+            exit 1
+          fi
+          echo "EXPO_PUBLIC_E2E_FAKE_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "已换取会话令牌 ✓（长度 ${#TOKEN}，值不打印）"
+
+      # 打包之前先类型检查：Metro 不做类型检查，所以"能打出包"完全不代表能跑起来。
+      # 真人真事：漏了一个 import（使用了一个不存在的导出）照样打包成功，用户装上启动即崩。
+      # 根 tsconfig 不包含 apps/mobile，所以两端都要跑。
+      - name: Typecheck (root + mobile)
+        run: |
+          pnpm exec tsc -p tsconfig.json --noEmit
+          pnpm exec tsc -p apps/mobile/tsconfig.json --noEmit
+
+      - name: Expo prebuild (android)
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild --platform android --clean --no-install
+
+      - name: Gradle 构建
+        working-directory: apps/mobile/android
+        run: |
+          set -e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+          echo "reactNativeArchitectures=${{ inputs.abis }}" >> gradle.properties
+          echo "EXPO_PUBLIC_API_URL=$EXPO_PUBLIC_API_URL"
+          echo "ABIs=${{ inputs.abis }}"
+          chmod +x gradlew
+          ./gradlew ${{ inputs.build_type }} --no-daemon --stacktrace || { echo '::error::gradle 失败'; exit 1; }
+
+      - name: 硬校验：APK 必须真的存在（不信步骤上的 ✓，只信产物）
+        run: |
+          set -e
+          APK=$(find apps/mobile/android/app/build/outputs/apk -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::没有产出任何 APK —— gradle 极可能空跑（检查 build_type 是否为空）"
+            ls -la apps/mobile/android/app/build/outputs/ 2>/dev/null || true
+            exit 1
+          fi
+          echo "产物: $APK ($(du -h "$APK" | cut -f1))"
+
+      - name: Collect APK
+        id: collect
+        run: |
+          set -e
+          find apps/mobile/android/app/build/outputs/apk -name "*.apk" -print
+          APK=$(find apps/mobile/android/app/build/outputs/apk -name "*.apk" | head -1)
+          mkdir -p out
+          cp "$APK" "out/openmuse-$(echo '${{ inputs.api_url }}' | tr -c 'A-Za-z0-9' '_').apk"
+          ls -lh out
+
+      - name: Enable KVM（模拟器需要硬件加速，ubuntu runner 有）
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: 安装 Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+
+      - name: 起模拟器并跑 Maestro
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          ram-size: 4096M
+          cores: 4
+          disable-animations: false
+          # 注意：这个 script 是**按行拆分、每行单独 sh -c** 执行的 —— 变量不跨行存活
+          # （原来 `APK=$(find ...)` 到下一行就没了 → `adb install -r ""` 直接失败，job 死在 Maestro 之前）。
+          # 所以真正的逻辑放在单一 shell 的脚本文件里。
+          script: bash .github/scripts/maestro-emulator.sh
+
+      - name: 归档验收证据（报告 + 截图 + 录屏）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-evidence
+          if-no-files-found: ignore
+          path: |
+            maestro-report.xml
+            ~/.maestro/tests/**/*
+            report.xml
+            screen.mp4
+
+      - name: 有 flow 失败则让 job 失败（不打包）
+        if: always()
+        run: |
+          if [ -f maestro-report.xml ] && grep -q 'failures="[1-9]' maestro-report.xml; then
+            echo "::error::Maestro 有失败用例，按约定不得打包"
+            exit 1
+          fi
+          test -z "$MAESTRO_FAILED" || exit 1

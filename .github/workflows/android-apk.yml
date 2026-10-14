@@ -1,0 +1,100 @@
+name: Build Android APK
+
+# 手动触发；服务器地址是输入参数，不硬编码
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "API base URL baked into the app (EXPO_PUBLIC_API_URL)"
+        required: true
+        default: "https://your-api.example.com"
+      build_type:
+        description: "Gradle task: assembleRelease (installable) or assembleDebug"
+        required: true
+        default: "assembleRelease"
+      abis:
+        description: "逗号分隔的 ABI（越少包越小；手机通常只需 arm64-v8a）"
+        required: true
+        default: "arm64-v8a"
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EXPO_PUBLIC_API_URL: ${{ inputs.api_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # ubuntu-latest 自带 Android SDK + cmdline-tools；不再用 android-actions/setup-android
+      # （v3 会去装已废弃的 "tools" 包并当场失败）
+      - name: Android SDK — 安装平台/构建工具/NDK
+        run: |
+          set -e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDKM="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | head -1)"
+          export PATH="$SDKM:$ANDROID_HOME/platform-tools:$PATH"
+          which sdkmanager
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" \
+            "ndk;27.1.12297006" "cmake;3.22.1" 2>&1 | tail -3
+          echo "sdk dirs:"; ls "$ANDROID_HOME"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 打包之前先类型检查：Metro 不做类型检查，所以"能打出包"完全不代表能跑起来。
+      # 真人真事：漏了一个 import（使用了一个不存在的导出）照样打包成功，用户装上启动即崩。
+      # 根 tsconfig 不包含 apps/mobile，所以两端都要跑。
+      - name: Typecheck (root + mobile)
+        run: |
+          pnpm exec tsc -p tsconfig.json --noEmit
+          pnpm exec tsc -p apps/mobile/tsconfig.json --noEmit
+
+      - name: Expo prebuild (android)
+        working-directory: apps/mobile
+        run: pnpm exec expo prebuild --platform android --clean --no-install
+
+      - name: Gradle 构建
+        working-directory: apps/mobile/android
+        run: |
+          set -e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g" >> gradle.properties
+          echo "reactNativeArchitectures=${{ inputs.abis }}" >> gradle.properties
+          echo "EXPO_PUBLIC_API_URL=$EXPO_PUBLIC_API_URL"
+          echo "ABIs=${{ inputs.abis }}"
+          chmod +x gradlew
+          ./gradlew ${{ inputs.build_type }} --no-daemon --stacktrace
+
+      - name: Collect APK
+        id: collect
+        run: |
+          set -e
+          find apps/mobile/android/app/build/outputs/apk -name "*.apk" -print
+          APK=$(find apps/mobile/android/app/build/outputs/apk -name "*.apk" | head -1)
+          mkdir -p out
+          cp "$APK" "out/openmuse-$(echo '${{ inputs.api_url }}' | tr -c 'A-Za-z0-9' '_').apk"
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openmuse-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 14
